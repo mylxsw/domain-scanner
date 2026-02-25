@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -57,6 +58,13 @@ CREATE TABLE IF NOT EXISTS probe_results (
   PRIMARY KEY(task_id, domain)
 );
 CREATE INDEX IF NOT EXISTS idx_probe_results_task_id ON probe_results(task_id);
+CREATE TABLE IF NOT EXISTS tld_catalog (
+  tld TEXT PRIMARY KEY,
+  is_iana_valid INTEGER NOT NULL DEFAULT 0,
+  is_namecheap_supported INTEGER NOT NULL DEFAULT 0,
+  has_price INTEGER NOT NULL DEFAULT 0,
+  last_checked_at TEXT NOT NULL
+);
 `); err != nil {
 		_ = db.Close()
 		return err
@@ -338,4 +346,58 @@ func nullIntToBoolPtr(ni sql.NullInt64) *bool {
 	}
 	b := ni.Int64 != 0
 	return &b
+}
+
+func (s *ProbeService) upsertTldCatalog(tld string, isIANAValid, isNamecheapSupported, hasPrice bool) error {
+	if s.db == nil {
+		return nil
+	}
+	tld = strings.ToLower(strings.TrimSpace(tld))
+	if tld == "" {
+		return nil
+	}
+
+	_, err := s.db.ExecContext(context.Background(), `
+INSERT INTO tld_catalog (tld, is_iana_valid, is_namecheap_supported, has_price, last_checked_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(tld) DO UPDATE SET
+  is_iana_valid=excluded.is_iana_valid,
+  is_namecheap_supported=excluded.is_namecheap_supported,
+  has_price=excluded.has_price,
+  last_checked_at=excluded.last_checked_at
+`, tld, boolToInt(isIANAValid), boolToInt(isNamecheapSupported), boolToInt(hasPrice), time.Now().Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *ProbeService) listCatalogSupportedTLDs() ([]string, error) {
+	if s.db == nil {
+		return nil, nil
+	}
+
+	rows, err := s.db.QueryContext(context.Background(), `
+SELECT tld FROM tld_catalog
+WHERE is_iana_valid = 1 AND is_namecheap_supported = 1
+ORDER BY tld ASC
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var tld string
+		if err := rows.Scan(&tld); err != nil {
+			return nil, err
+		}
+		out = append(out, tld)
+	}
+	return out, rows.Err()
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }

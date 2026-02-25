@@ -334,9 +334,39 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 	tldMeta := make(map[string]map[string]string)
 	var preflightInvalidItems []model.ProbeItem
 	seen := make(map[string]bool)
+
+	observedNamecheap := make(map[string]bool)
 	for _, t := range tlds {
 		name := strings.ToLower(strings.TrimSpace(t["Name"]))
 		if name == "" {
+			continue
+		}
+		observedNamecheap[name] = true
+		tldMeta[name] = t
+	}
+
+	for name := range observedNamecheap {
+		_, hasPrice := pricing[name]
+		_ = s.upsertTldCatalog(name, s.isIanaRootTld(name, ianaTLDs), true, hasPrice)
+	}
+
+	sourceNames := make([]string, 0, len(observedNamecheap))
+	if task.TldMode == model.TldModeAll {
+		catalogNames, err := s.listCatalogSupportedTLDs()
+		if err == nil && len(catalogNames) > 0 {
+			sourceNames = append(sourceNames, catalogNames...)
+			sendPhase("filtering", fmt.Sprintf("全量模式使用本地清单，共 %d 个候选 TLD", len(sourceNames)))
+		}
+	}
+	if len(sourceNames) == 0 {
+		for name := range observedNamecheap {
+			sourceNames = append(sourceNames, name)
+		}
+	}
+
+	sort.Strings(sourceNames)
+	for _, name := range sourceNames {
+		if !s.shouldIncludeByMode(name, task.TldMode) {
 			continue
 		}
 		if !s.isValidTld(name, pricing) {
@@ -371,20 +401,9 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 			}
 			continue
 		}
-		if task.TldMode == model.TldModeApiRegisterableOnly {
-			if strings.ToLower(strings.TrimSpace(t["IsApiRegisterable"])) != "true" {
-				continue
-			}
-		}
-		if task.TldMode == model.TldModeMainstreamOnly {
-			if !s.isMainstreamTld(name, pricing) {
-				continue
-			}
-		}
 		if !seen[name] {
 			seen[name] = true
 			tldNames = append(tldNames, name)
-			tldMeta[name] = t
 		}
 	}
 
@@ -583,11 +602,6 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 					msg = "Domain check failed"
 				}
 				errMsg = &msg
-				totalPrice = nil
-			} else if isLikelyInvalidTLDResult(available, basePrice, premiumReg, icannFee, eapFee, pricing[tld]) {
-				msg := "Invalid TLD"
-				errMsg = &msg
-				available = nil
 				totalPrice = nil
 			}
 
@@ -890,6 +904,41 @@ func parseIanaTlds(content string) map[string]bool {
 	return set
 }
 
+func (s *ProbeService) shouldIncludeByMode(name string, mode model.TldMode) bool {
+	switch mode {
+	case model.TldModeMainstreamOnly:
+		_, ok := mainstreamTLDSet[name]
+		return ok
+	case model.TldModeApiRegisterableOnly:
+		_, ok := cheapTLDSet[name]
+		return ok
+	default:
+		return true
+	}
+}
+
+var mainstreamTLDSet = map[string]bool{
+	"com": true,
+	"net": true,
+	"org": true,
+	"io":  true,
+	"co":  true,
+	"app": true,
+	"dev": true,
+	"ai":  true,
+}
+
+var cheapTLDSet = map[string]bool{
+	"xyz":    true,
+	"top":    true,
+	"club":   true,
+	"site":   true,
+	"online": true,
+	"store":  true,
+	"space":  true,
+	"icu":    true,
+}
+
 // isMainstreamTld checks if a TLD is "mainstream" (has ICANN fee)
 func (s *ProbeService) isMainstreamTld(name string, pricing map[string]map[string]string) bool {
 	priceInfo, ok := pricing[name]
@@ -1171,23 +1220,3 @@ func calcTotalPrice(available, isPremium *bool, basePrice, premiumPrice, icannFe
 }
 
 // isLikelyInvalidTLDResult identifies placeholder "available=true but no pricing at all" responses.
-func isLikelyInvalidTLDResult(available *bool, basePrice, premiumPrice, icannFee, eapFee *float64, priceInfo map[string]string) bool {
-	if available == nil || !*available {
-		return false
-	}
-
-	isZeroOrNil := func(v *float64) bool {
-		return v == nil || *v == 0
-	}
-
-	if !(isZeroOrNil(basePrice) && isZeroOrNil(premiumPrice) && isZeroOrNil(icannFee) && isZeroOrNil(eapFee)) {
-		return false
-	}
-
-	// If pricing API has no entry for this TLD, it's most likely not supported/invalid.
-	if len(priceInfo) == 0 {
-		return true
-	}
-
-	return false
-}
