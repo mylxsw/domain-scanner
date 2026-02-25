@@ -284,6 +284,7 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 	// Filter TLDs
 	sendPhase("filtering", "正在筛选 TLD...")
 	var tldNames []string
+	tldMeta := make(map[string]map[string]string)
 	seen := make(map[string]bool)
 	for _, t := range tlds {
 		name := strings.ToLower(strings.TrimSpace(t["Name"]))
@@ -303,6 +304,7 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 		if !seen[name] {
 			seen[name] = true
 			tldNames = append(tldNames, name)
+			tldMeta[name] = t
 		}
 	}
 
@@ -365,7 +367,7 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 					Raw:    map[string]interface{}{"error": errMsg},
 				}
 				if priceInfo, ok := pricing[tld]; ok {
-					item.BaseRegisterPrice = toFloat(priceInfo["Price"])
+					item.BaseRegisterPrice = chooseBasePrice(priceInfo)
 				}
 
 				yielded = append(yielded, item)
@@ -403,13 +405,24 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 			premiumReg := toFloat(raw.PremiumRegistrationPrice)
 			icannFee := toFloat(raw.IcannFee)
 			eapFee := toFloat(raw.EapFee)
+			unsupportedByTLDMeta := false
+			if meta, ok := tldMeta[tld]; ok {
+				unsupportedByTLDMeta = strings.ToLower(strings.TrimSpace(meta["IsApiRegisterable"])) != "true"
+			}
 
 			var currency *string
 			var basePrice *float64
 			if priceInfo, ok := pricing[tld]; ok {
-				c := priceInfo["Currency"]
-				currency = &c
-				basePrice = toFloat(priceInfo["Price"])
+				if c := strings.TrimSpace(priceInfo["Currency"]); c != "" {
+					currency = &c
+				}
+				basePrice = chooseBasePrice(priceInfo)
+			}
+
+			// If base price is missing from pricing API, treat "0" premium fee from domains.check
+			// as unknown instead of a real zero-dollar price.
+			if basePrice == nil && premiumReg != nil && *premiumReg == 0 {
+				premiumReg = nil
 			}
 
 			totalPrice := calcTotalPrice(available, isPremium, basePrice, premiumReg, icannFee, eapFee)
@@ -418,10 +431,27 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 			rawMap := map[string]interface{}{
 				"Domain":                   raw.Domain,
 				"Available":                raw.Available,
+				"ErrorNo":                  raw.ErrorNo,
+				"Description":              raw.Description,
 				"IsPremiumName":            raw.IsPremiumName,
 				"PremiumRegistrationPrice": raw.PremiumRegistrationPrice,
 				"IcannFee":                 raw.IcannFee,
 				"EapFee":                   raw.EapFee,
+			}
+
+			var errMsg *string
+			if unsupportedByTLDMeta {
+				msg := "Unsupported TLD (not API registerable)"
+				errMsg = &msg
+				available = nil
+				totalPrice = nil
+			} else if strings.TrimSpace(raw.ErrorNo) != "" && strings.TrimSpace(raw.ErrorNo) != "0" {
+				msg := strings.TrimSpace(raw.Description)
+				if msg == "" {
+					msg = "Domain check failed"
+				}
+				errMsg = &msg
+				totalPrice = nil
 			}
 
 			item := model.ProbeItem{
@@ -435,6 +465,7 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 				IcannFee:             icannFee,
 				EapFee:               eapFee,
 				TotalPrice:           totalPrice,
+				Error:                errMsg,
 				Raw:                  rawMap,
 			}
 
@@ -860,6 +891,20 @@ func toFloat(v interface{}) *float64 {
 	return &f
 }
 
+// chooseBasePrice picks the best available register price field.
+// Namecheap pricing commonly provides YourPrice/Price/RegularPrice.
+func chooseBasePrice(priceInfo map[string]string) *float64 {
+	candidates := []string{"YourPrice", "Price", "RegularPrice"}
+	for _, k := range candidates {
+		if v, ok := priceInfo[k]; ok {
+			if p := toFloat(v); p != nil && *p > 0 {
+				return p
+			}
+		}
+	}
+	return nil
+}
+
 // safeAdd safely adds multiple float values
 func safeAdd(xs ...*float64) *float64 {
 	var acc float64
@@ -883,7 +928,13 @@ func calcTotalPrice(available, isPremium *bool, basePrice, premiumPrice, icannFe
 		return nil
 	}
 	if isPremium != nil && *isPremium {
+		if premiumPrice == nil || *premiumPrice <= 0 {
+			return nil
+		}
 		return safeAdd(premiumPrice, icannFee, eapFee)
+	}
+	if basePrice == nil || *basePrice <= 0 {
+		return nil
 	}
 	return safeAdd(basePrice, icannFee, eapFee)
 }

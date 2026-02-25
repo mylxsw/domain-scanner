@@ -13,6 +13,8 @@ type NamecheapConfig struct {
 type DomainCheckResult struct {
 	Domain                   string `json:"Domain"`
 	Available                string `json:"Available"`
+	ErrorNo                  string `json:"ErrorNo"`
+	Description              string `json:"Description"`
 	IsPremiumName            string `json:"IsPremiumName"`
 	PremiumRegistrationPrice string `json:"PremiumRegistrationPrice"`
 	IcannFee                 string `json:"IcannFee"`

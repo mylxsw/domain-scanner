@@ -187,6 +187,8 @@ func (c *NamecheapClient) DomainsCheck(ctx context.Context, domains []string) ([
 			result.Domain = domain
 		}
 		result.Available = r.SelectAttrValue("Available", "")
+		result.ErrorNo = r.SelectAttrValue("ErrorNo", "")
+		result.Description = r.SelectAttrValue("Description", "")
 		result.IsPremiumName = r.SelectAttrValue("IsPremiumName", "")
 		result.PremiumRegistrationPrice = r.SelectAttrValue("PremiumRegistrationPrice", "")
 		result.IcannFee = r.SelectAttrValue("IcannFee", "")
