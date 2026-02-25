@@ -7,9 +7,11 @@ import type { ProbeTask } from '@/types'
 interface ProbeProgressProps {
   task: ProbeTask
   className?: string
+  phaseMessage?: string
+  currentDomain?: string
 }
 
-export default function ProbeProgress({ task, className }: ProbeProgressProps) {
+export default function ProbeProgress({ task, className, phaseMessage, currentDomain }: ProbeProgressProps) {
   const percentage = task.total > 0
     ? Math.round((task.completed / task.total) * 100)
     : 0
@@ -51,12 +53,17 @@ export default function ProbeProgress({ task, className }: ProbeProgressProps) {
                 <div className="font-medium">探测进度</div>
                 <div className="text-sm text-muted-foreground">
                   {task.status === 'running' && (
-                    <>正在探测域名可用性...</>
+                    phaseMessage || (currentDomain ? `正在探测 ${currentDomain}` : '正在探测域名可用性...')
                   )}
                   {task.status === 'completed' && '所有域名检查完成'}
                   {task.status === 'failed' && (task.error || '探测过程中出现错误')}
-                  {task.status === 'pending' && '等待开始探测'}
+                  {task.status === 'pending' && (phaseMessage || '等待开始探测')}
                 </div>
+                {currentDomain && task.status === 'running' && phaseMessage && (
+                  <div className="text-xs text-muted-foreground mt-1">
+                    当前: <span className="font-mono text-foreground">{currentDomain}</span>
+                  </div>
+                )}
               </div>
             </div>
             {getStatusBadge()}

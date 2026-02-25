@@ -14,7 +14,7 @@ import (
 func main() {
 	var (
 		host   = flag.String("host", "127.0.0.1", "监听地址")
-		port   = flag.Int("port", 8000, "监听端口")
+		port   = flag.Int("port", 8080, "监听端口")
 		outdir = flag.String("outdir", "./out", "输出目录")
 	)
 	flag.Parse()

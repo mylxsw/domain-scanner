@@ -78,6 +78,17 @@ export function useProbeResults(taskId: string | undefined) {
       return fetchApi(`/api/probe/${taskId}/results`)
     },
     enabled: !!taskId,
+    refetchInterval: (query) => {
+      const data = query.state.data
+      if (!data) return 2000
+      const status = data.task?.status
+      const total = data.task?.total ?? 0
+      const count = data.results?.length ?? 0
+      if ((status === 'completed' || status === 'failed') && (total === 0 || count >= total)) {
+        return false
+      }
+      return 2000
+    },
   })
 }
 
@@ -87,11 +98,13 @@ export function useUpdateProbeResults(taskId: string | undefined) {
   return {
     addResult: (item: ProbeItem) => {
       if (!taskId) return
+      if (!item?.domain) return
       queryClient.setQueryData(['probe', taskId, 'results'], (old: any) => {
         if (!old) return { task: null, results: [item] }
-        const exists = old.results.find((r: ProbeItem) => r.domain === item.domain)
+        const oldResults = Array.isArray(old.results) ? old.results : []
+        const exists = oldResults.find((r: ProbeItem) => r.domain === item.domain)
         if (exists) return old
-        return { ...old, results: [...old.results, item] }
+        return { ...old, results: [...oldResults, item] }
       })
     },
     updateTask: (task: Partial<ProbeTask>) => {
@@ -100,6 +113,10 @@ export function useUpdateProbeResults(taskId: string | undefined) {
         if (!old) return old
         return { ...old, ...task }
       })
+    },
+    refetchResults: () => {
+      if (!taskId) return
+      queryClient.invalidateQueries({ queryKey: ['probe', taskId, 'results'] })
     },
   }
 }

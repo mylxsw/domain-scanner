@@ -10,15 +10,17 @@ import ResultsTable from '@/components/ResultsTable'
 import PriceChart from '@/components/PriceChart'
 import { useProbeTask, useProbeResults, useUpdateProbeResults } from '@/hooks/use-probe'
 import { useSSE } from '@/hooks/use-sse'
-import type { ProbeItem, ProgressEvent, SummaryEvent } from '@/types'
+import type { ProgressEvent, SummaryEvent, PhaseEvent } from '@/types'
 
 export default function ResultsPage() {
   const { probeId } = useParams<{ probeId: string }>()
   const [activeTab, setActiveTab] = useState('table')
+  const [phaseMessage, setPhaseMessage] = useState<string>('')
+  const [currentDomain, setCurrentDomain] = useState<string>('')
 
   const { data: task, isLoading: isTaskLoading, error: taskError } = useProbeTask(probeId)
-  const { data: resultsData, isLoading: isResultsLoading } = useProbeResults(probeId)
-  const { addResult, updateTask } = useUpdateProbeResults(probeId)
+  const { data: resultsData } = useProbeResults(probeId)
+  const { addResult, updateTask, refetchResults } = useUpdateProbeResults(probeId)
 
   const results = resultsData?.results || []
 
@@ -26,23 +28,32 @@ export default function ResultsPage() {
     probeId ? `/api/probe/${probeId}/stream` : null,
     {
       onMessage: (data: unknown) => {
-        const event = data as ProgressEvent | SummaryEvent | { type: string }
+        const event = data as ProgressEvent | SummaryEvent | PhaseEvent | { type: string }
 
-        if ((event as ProgressEvent).type === 'progress') {
+        if ((event as PhaseEvent).type === 'phase') {
+          const phaseEvent = event as PhaseEvent
+          setPhaseMessage(phaseEvent.message)
+        } else if ((event as ProgressEvent).type === 'progress') {
           const progressEvent = event as ProgressEvent
+          setCurrentDomain(progressEvent.data?.domain || '')
           updateTask({
+            status: 'running',
             completed: progressEvent.index,
             total: progressEvent.total,
           })
-          // Add to results if not already present
-          addResult(progressEvent.data)
+          if (progressEvent.data?.domain) {
+            addResult(progressEvent.data)
+          }
         } else if ((event as SummaryEvent).type === 'summary') {
           const summaryEvent = event as SummaryEvent
+          setPhaseMessage('')
+          setCurrentDomain('')
           updateTask({
             status: 'completed',
             total: summaryEvent.total,
             elapsed_seconds: summaryEvent.elapsed_seconds,
           })
+          refetchResults()
         }
       },
       onError: (error) => {
@@ -164,7 +175,7 @@ export default function ResultsPage() {
         </div>
       </div>
 
-      <ProbeProgress task={task} />
+      <ProbeProgress task={task} phaseMessage={phaseMessage} currentDomain={currentDomain} />
 
       <div className="grid gap-4 sm:grid-cols-4">
         <div className="bg-card border rounded-lg p-4">

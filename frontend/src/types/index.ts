@@ -20,6 +20,12 @@ export interface ProgressEvent {
   data: ProbeItem
 }
 
+export interface PhaseEvent {
+  type: 'phase'
+  phase: string
+  message: string
+}
+
 export interface SummaryEvent {
   type: 'summary'
   word: string

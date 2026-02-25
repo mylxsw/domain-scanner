@@ -12,6 +12,14 @@ import (
 	"github.com/mylxsw/namecheap-domain-probe/backend/internal/model"
 )
 
+// localXMLTag strips namespace prefix from etree element tags.
+func localXMLTag(tag string) string {
+	if idx := strings.LastIndex(tag, "}"); idx >= 0 {
+		return tag[idx+1:]
+	}
+	return tag
+}
+
 // NamecheapClient is the client for Namecheap API
 type NamecheapClient struct {
 	cfg     *model.NamecheapConfig
@@ -137,10 +145,9 @@ func (c *NamecheapClient) GetTldList(ctx context.Context) ([]map[string]string, 
 		return nil, err
 	}
 
-	ns := "http://api.namecheap.com/xml.response"
 	var tlds []map[string]string
 
-	for _, tld := range root.FindElements(".//{" + ns + "}Tld") {
+	for _, tld := range root.FindElements(".//Tld") {
 		attrs := make(map[string]string)
 		for _, attr := range tld.Attr {
 			attrs[attr.Key] = attr.Value
@@ -172,10 +179,9 @@ func (c *NamecheapClient) DomainsCheck(ctx context.Context, domains []string) ([
 		return nil, err
 	}
 
-	ns := "http://api.namecheap.com/xml.response"
 	var results []model.DomainCheckResult
 
-	for _, r := range root.FindElements(".//{" + ns + "}DomainCheckResult") {
+	for _, r := range root.FindElements(".//DomainCheckResult") {
 		result := model.DomainCheckResult{}
 		if domain := r.SelectAttrValue("Domain", ""); domain != "" {
 			result.Domain = domain
@@ -209,28 +215,21 @@ func (c *NamecheapClient) GetPricingRegister1y(ctx context.Context) (map[string]
 			return nil, err
 		}
 
-		ns := "http://api.namecheap.com/xml.response"
 		pricing := make(map[string]map[string]string)
 
-		for _, cat := range root.FindElements(".//{" + ns + "}ProductCategory") {
+		for _, cat := range root.FindElements(".//ProductCategory") {
 			catName := strings.ToUpper(cat.SelectAttrValue("Name", ""))
 			if catName != "REGISTER" {
 				continue
 			}
 
-			for _, prod := range cat.ChildElements() {
-				if prod.Tag != "Product" {
-					continue
-				}
+			for _, prod := range cat.FindElements("Product") {
 				tld := strings.ToLower(prod.SelectAttrValue("Name", ""))
 				if tld == "" {
 					continue
 				}
 
-				for _, price := range prod.ChildElements() {
-					if price.Tag != "Price" {
-						continue
-					}
+				for _, price := range prod.FindElements("Price") {
 					duration := price.SelectAttrValue("Duration", "")
 					durationType := strings.ToUpper(price.SelectAttrValue("DurationType", ""))
 

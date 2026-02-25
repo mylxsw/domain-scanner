@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -87,7 +88,10 @@ func (h *Handler) GetProbeResults(c *gin.Context) {
 		return
 	}
 
-	results, _ := h.probeService.GetResults(taskID)
+	results, _, err := h.probeService.GetResultsOrLoad(taskID)
+	if err != nil {
+		log.Printf("load probe results failed for task=%s: %v", taskID, err)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"task":    task,

@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -90,6 +91,86 @@ func (s *ProbeService) GetResults(id string) ([]model.ProbeItem, bool) {
 	return results, ok
 }
 
+// GetResultsOrLoad returns in-memory results, and falls back to rebuilding
+// from results.jsonl if memory cache is empty.
+func (s *ProbeService) GetResultsOrLoad(id string) ([]model.ProbeItem, bool, error) {
+	results, ok := s.GetResults(id)
+	if ok && len(results) > 0 {
+		return results, true, nil
+	}
+
+	task, taskOK := s.GetTask(id)
+	if !taskOK {
+		return results, ok, nil
+	}
+
+	jsonlPath := task.ResultsJsonl
+	if jsonlPath == "" && task.Outdir != "" {
+		jsonlPath = filepath.Join(task.Outdir, "results.jsonl")
+	}
+	if jsonlPath == "" {
+		jsonlPath = filepath.Join(s.outdir, task.ID, "results.jsonl")
+	}
+
+	rebuilt, err := s.loadResultsFromJSONL(jsonlPath)
+	if err != nil {
+		return results, ok, err
+	}
+	if len(rebuilt) == 0 {
+		return rebuilt, true, nil
+	}
+
+	s.mu.Lock()
+	s.results[id] = rebuilt
+	s.mu.Unlock()
+
+	return rebuilt, true, nil
+}
+
+func (s *ProbeService) loadResultsFromJSONL(path string) ([]model.ProbeItem, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+
+	var items []model.ProbeItem
+	seen := make(map[string]bool)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		var env struct {
+			Type string          `json:"type"`
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(line), &env); err == nil && env.Type == "progress" && len(env.Data) > 0 {
+			var item model.ProbeItem
+			if err := json.Unmarshal(env.Data, &item); err == nil && item.Domain != "" && !seen[item.Domain] {
+				seen[item.Domain] = true
+				items = append(items, item)
+				continue
+			}
+		}
+
+		var direct model.ProbeItem
+		if err := json.Unmarshal([]byte(line), &direct); err == nil && direct.Domain != "" && !seen[direct.Domain] {
+			seen[direct.Domain] = true
+			items = append(items, direct)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return items, nil
+}
+
 // RunTask runs a probe task
 func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan chan<- interface{}) error {
 	task, ok := s.GetTask(taskID)
@@ -165,30 +246,48 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 
 	startedAt := time.Now()
 
+	sendPhase := func(phase, message string) {
+		log.Printf("[probe:%s] %s: %s", taskID[:8], phase, message)
+		if progressChan != nil {
+			progressChan <- model.PhaseEvent{
+				Type:    "phase",
+				Phase:   phase,
+				Message: message,
+			}
+		}
+	}
+
 	// Load TLDs
+	sendPhase("loading_tlds", "正在从 Namecheap API 加载 TLD 列表...")
 	tlds, err := s.loadOrRefreshTlds(ctx, tldCache, task.CacheTTLHours, func() ([]map[string]string, error) {
 		return client.GetTldList(ctx)
 	})
 	if err != nil {
 		s.markTaskFailed(taskID, err.Error())
+		sendPhase("error", fmt.Sprintf("加载 TLD 列表失败: %s", err.Error()))
 		return err
 	}
+	sendPhase("loading_tlds", fmt.Sprintf("已加载 %d 个 TLD", len(tlds)))
 
 	// Load pricing
+	sendPhase("loading_pricing", "正在从 Namecheap API 加载定价信息...")
 	pricing, err := s.loadOrRefreshPricing(ctx, pricingCache, task.CacheTTLHours, func() (map[string]map[string]string, error) {
 		return client.GetPricingRegister1y(ctx)
 	})
 	if err != nil {
 		s.markTaskFailed(taskID, err.Error())
+		sendPhase("error", fmt.Sprintf("加载定价信息失败: %s", err.Error()))
 		return err
 	}
+	sendPhase("loading_pricing", fmt.Sprintf("已加载 %d 个 TLD 的定价信息", len(pricing)))
 
 	// Filter TLDs
+	sendPhase("filtering", "正在筛选 TLD...")
 	var tldNames []string
 	seen := make(map[string]bool)
 	for _, t := range tlds {
 		name := strings.ToLower(strings.TrimSpace(t["Name"]))
-		if !s.isValidTld(name, pricing) {
+		if name == "" {
 			continue
 		}
 		if task.TldMode == model.TldModeApiRegisterableOnly {
@@ -211,6 +310,14 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 	sort.Strings(tldNames)
 
 	total := len(tldNames)
+	sendPhase("filtering", fmt.Sprintf("筛选后共 %d 个 TLD 需要探测 (模式: %s)", total, task.TldMode))
+
+	if total == 0 {
+		log.Printf("[probe:%s] WARNING: 0 TLDs after filtering. TLDs from API: %d, Pricing entries: %d", taskID[:8], len(tlds), len(pricing))
+		if len(pricing) == 0 {
+			log.Printf("[probe:%s] Pricing is empty - this is likely the cause. Check Namecheap API key permissions.", taskID[:8])
+		}
+	}
 
 	// Update task total
 	s.mu.Lock()
@@ -240,6 +347,10 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 		for j, tld := range batchTlds {
 			batchDomains[j] = fmt.Sprintf("%s.%s", task.Word, tld)
 		}
+
+		batchNum := i/task.MaxBatch + 1
+		totalBatches := (total + task.MaxBatch - 1) / task.MaxBatch
+		sendPhase("probing", fmt.Sprintf("正在探测第 %d/%d 批域名: %s ... %s", batchNum, totalBatches, batchDomains[0], batchDomains[len(batchDomains)-1]))
 
 		results, err := client.DomainsCheck(ctx, batchDomains)
 		if err != nil {

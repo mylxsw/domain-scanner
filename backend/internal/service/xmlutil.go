@@ -19,18 +19,13 @@ func ParseXML(xmlText string) (*etree.Element, error) {
 
 // GetErrors extracts error information from XML response
 func GetErrors(root *etree.Element) []model.ErrorInfo {
-	ns := "http://api.namecheap.com/xml.response"
-
 	var errors []model.ErrorInfo
-	errorsElem := root.FindElement(".//{" + ns + "}Errors")
+	errorsElem := root.FindElement(".//Errors")
 	if errorsElem == nil {
 		return errors
 	}
 
-	for _, err := range errorsElem.ChildElements() {
-		if err.Tag != "Error" {
-			continue
-		}
+	for _, err := range errorsElem.FindElements("Error") {
 		number := err.SelectAttrValue("Number", err.SelectAttrValue("number", ""))
 		text := strings.TrimSpace(err.Text())
 		errors = append(errors, model.ErrorInfo{

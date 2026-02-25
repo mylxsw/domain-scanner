@@ -95,8 +95,6 @@ export default function ResultsTable({ results }: ResultsTableProps) {
 
   const availableCount = results.filter(r => r.available === true).length
   const unavailableCount = results.filter(r => r.available === false && !r.error).length
-  const errorCount = results.filter(r => r.error).length
-
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">

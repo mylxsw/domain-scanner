@@ -69,6 +69,13 @@ type ProgressEvent struct {
 	Data  ProbeItem `json:"data"`
 }
 
+// PhaseEvent represents a phase change during probing
+type PhaseEvent struct {
+	Type    string `json:"type"`
+	Phase   string `json:"phase"`
+	Message string `json:"message"`
+}
+
 // SummaryEvent represents the final summary
 type SummaryEvent struct {
 	Type           string  `json:"type"`
