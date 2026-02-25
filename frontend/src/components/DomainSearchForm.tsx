@@ -1,35 +1,55 @@
-import { useState } from 'react'
-import { Search, Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { useStartProbe } from '@/hooks/use-probe'
-import type { TldMode } from '@/types'
+import { useState } from "react";
+import { Search, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useStartProbe } from "@/hooks/use-probe";
+import type { TldMode } from "@/types";
 
 const TLD_MODES: { value: TldMode; label: string; description: string }[] = [
-  { value: 'all', label: '全部 TLD', description: '检测所有支持的域名后缀（约30+个）' },
-  { value: 'mainstream-only', label: '热门后缀', description: '仅检测主流后缀如 .com .net .org .io 等' },
-  { value: 'api-registerable-only', label: '低价后缀', description: '仅检测价格较低的域名后缀' },
-]
+  { value: "all", label: "全部 TLD", description: "检测所有支持的域名后缀" },
+  {
+    value: "mainstream-only",
+    label: "热门后缀",
+    description: "仅检测主流后缀如 .com .net .org .io 等",
+  },
+  {
+    value: "api-registerable-only",
+    label: "低价后缀",
+    description: "仅检测价格较低的域名后缀",
+  },
+];
 
 export default function DomainSearchForm() {
-  const [word, setWord] = useState('')
-  const [tldMode, setTldMode] = useState<TldMode>('all')
-  const startProbe = useStartProbe()
+  const [word, setWord] = useState("");
+  const [tldMode, setTldMode] = useState<TldMode>("all");
+  const startProbe = useStartProbe();
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!word.trim()) return
+    e.preventDefault();
+    if (!word.trim()) return;
 
     startProbe.mutate({
       word: word.trim().toLowerCase(),
       tld_mode: tldMode,
-    })
-  }
+    });
+  };
 
-  const isLoading = startProbe.isPending
+  const isLoading = startProbe.isPending;
 
   return (
     <Card className="w-full max-w-2xl mx-auto">
@@ -60,7 +80,11 @@ export default function DomainSearchForm() {
 
           <div className="space-y-2">
             <Label>TLD 检测模式</Label>
-            <Select value={tldMode} onValueChange={(v) => setTldMode(v as TldMode)} disabled={isLoading}>
+            <Select
+              value={tldMode}
+              onValueChange={(v) => setTldMode(v as TldMode)}
+              disabled={isLoading}
+            >
               <SelectTrigger>
                 <SelectValue placeholder="选择检测模式" />
               </SelectTrigger>
@@ -69,7 +93,9 @@ export default function DomainSearchForm() {
                   <SelectItem key={mode.value} value={mode.value}>
                     <div className="flex flex-col items-start">
                       <span>{mode.label}</span>
-                      <span className="text-xs text-muted-foreground">{mode.description}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {mode.description}
+                      </span>
                     </div>
                   </SelectItem>
                 ))}
@@ -79,8 +105,9 @@ export default function DomainSearchForm() {
 
           <div className="flex items-center justify-between pt-4">
             <div className="text-sm text-muted-foreground">
-              检测模式: <span className="font-medium text-foreground">
-                {TLD_MODES.find(m => m.value === tldMode)?.label}
+              检测模式:{" "}
+              <span className="font-medium text-foreground">
+                {TLD_MODES.find((m) => m.value === tldMode)?.label}
               </span>
             </div>
             <Button
@@ -104,5 +131,5 @@ export default function DomainSearchForm() {
         </form>
       </CardContent>
     </Card>
-  )
+  );
 }

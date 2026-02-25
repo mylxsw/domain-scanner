@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import type { ProbeItem } from '@/types'
 
-type SortField = 'domain' | 'tld' | 'available' | 'price'
+type SortField = 'domain' | 'tld' | 'tld_length' | 'available' | 'price'
 type SortDirection = 'asc' | 'desc'
 
 interface ResultsTableProps {
@@ -24,7 +24,7 @@ export default function ResultsTable({ results }: ResultsTableProps) {
   const [sortField, setSortField] = useState<SortField>('available')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [filterText, setFilterText] = useState('')
-  const [availabilityFilter, setAvailabilityFilter] = useState<'all' | 'available' | 'unavailable'>('all')
+  const [availabilityFilter, setAvailabilityFilter] = useState<'all' | 'available' | 'unavailable' | 'error'>('all')
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -62,9 +62,11 @@ export default function ResultsTable({ results }: ResultsTableProps) {
     }
 
     if (availabilityFilter !== 'all') {
-      filtered = filtered.filter(r =>
-        availabilityFilter === 'available' ? r.available === true : r.available === false
-      )
+      filtered = filtered.filter((r) => {
+        if (availabilityFilter === 'available') return r.available === true && !r.error
+        if (availabilityFilter === 'unavailable') return r.available === false && !r.error
+        return !!r.error
+      })
     }
 
     return [...filtered].sort((a, b) => {
@@ -82,6 +84,9 @@ export default function ResultsTable({ results }: ResultsTableProps) {
           const bAvail = b.available === true ? 2 : (b.available === false ? 0 : 1)
           comparison = bAvail - aAvail
           break
+        case 'tld_length':
+          comparison = a.tld.length - b.tld.length
+          break
         case 'price':
           const priceA = a.total_price ?? Infinity
           const priceB = b.total_price ?? Infinity
@@ -95,6 +100,7 @@ export default function ResultsTable({ results }: ResultsTableProps) {
 
   const availableCount = results.filter(r => r.available === true).length
   const unavailableCount = results.filter(r => r.available === false && !r.error).length
+  const errorCount = results.filter(r => !!r.error).length
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
@@ -123,6 +129,15 @@ export default function ResultsTable({ results }: ResultsTableProps) {
           >
             <XCircle className="h-4 w-4 text-red-500" />
             已注册 ({unavailableCount})
+          </Button>
+          <Button
+            variant={availabilityFilter === 'error' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setAvailabilityFilter('error')}
+            className="gap-1"
+          >
+            <AlertCircle className="h-4 w-4 text-yellow-600" />
+            错误 ({errorCount})
           </Button>
         </div>
 
@@ -164,6 +179,17 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                 <Button
                   variant="ghost"
                   size="sm"
+                  onClick={() => handleSort('tld_length')}
+                  className="gap-1"
+                >
+                  后缀长度
+                  {getSortIcon('tld_length')}
+                </Button>
+              </TableHead>
+              <TableHead>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => handleSort('available')}
                   className="gap-1"
                 >
@@ -188,7 +214,7 @@ export default function ResultsTable({ results }: ResultsTableProps) {
           <TableBody>
             {filteredAndSortedResults.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                   暂无数据
                 </TableCell>
               </TableRow>
@@ -200,6 +226,9 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">.{result.tld}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-sm">{result.tld.length}</span>
                   </TableCell>
                   <TableCell>
                     {result.error ? (
@@ -231,13 +260,19 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                     )}
                   </TableCell>
                   <TableCell className="hidden sm:table-cell text-muted-foreground text-sm">
-                    {result.is_premium === true && (
-                      <Badge variant="secondary" className="mr-1">Premium</Badge>
-                    )}
-                    {result.base_register_price !== null && result.total_price !== null && (
-                      <span className="text-xs">
-                        基础: {formatPrice(result.base_register_price, result.currency)}
-                      </span>
+                    {result.error ? (
+                      <span className="text-xs text-yellow-700">{result.error}</span>
+                    ) : (
+                      <>
+                        {result.is_premium === true && (
+                          <Badge variant="secondary" className="mr-1">Premium</Badge>
+                        )}
+                        {result.base_register_price !== null && result.total_price !== null && (
+                          <span className="text-xs">
+                            基础: {formatPrice(result.base_register_price, result.currency)}
+                          </span>
+                        )}
+                      </>
                     )}
                   </TableCell>
                 </TableRow>

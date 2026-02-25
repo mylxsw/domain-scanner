@@ -36,7 +36,10 @@ func main() {
 	}
 
 	// Initialize services
-	probeService := service.NewProbeService(*outdir)
+	probeService, err := service.NewProbeService(*outdir)
+	if err != nil {
+		log.Fatalf("Failed to initialize probe service: %v", err)
+	}
 	namecheapClient := service.NewNamecheapClient(cfg, 45.0, 30.0)
 	tldService := service.NewTLDService(namecheapClient)
 

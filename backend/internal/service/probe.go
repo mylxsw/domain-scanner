@@ -3,11 +3,14 @@ package service
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,21 +25,26 @@ import (
 
 // ProbeService handles domain probe operations
 type ProbeService struct {
-	tasks       map[string]*model.ProbeTask
-	results     map[string][]model.ProbeItem
+	tasks        map[string]*model.ProbeTask
+	results      map[string][]model.ProbeItem
 	runningTasks map[string]bool // track tasks that are being started
-	mu          sync.RWMutex
-	outdir      string
+	mu           sync.RWMutex
+	outdir       string
+	db           *sql.DB
 }
 
 // NewProbeService creates a new probe service
-func NewProbeService(outdir string) *ProbeService {
-	return &ProbeService{
+func NewProbeService(outdir string) (*ProbeService, error) {
+	s := &ProbeService{
 		tasks:        make(map[string]*model.ProbeTask),
 		results:      make(map[string][]model.ProbeItem),
 		runningTasks: make(map[string]bool),
 		outdir:       outdir,
 	}
+	if err := s.initStore(filepath.Join(outdir, "probe.sqlite")); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // CreateTask creates a new probe task
@@ -71,6 +79,9 @@ func (s *ProbeService) CreateTask(req *model.CreateProbeRequest) (*model.ProbeTa
 	s.mu.Lock()
 	s.tasks[task.ID] = task
 	s.mu.Unlock()
+	if err := s.upsertTask(task); err != nil {
+		return nil, err
+	}
 
 	return task, nil
 }
@@ -78,17 +89,39 @@ func (s *ProbeService) CreateTask(req *model.CreateProbeRequest) (*model.ProbeTa
 // GetTask gets a task by ID
 func (s *ProbeService) GetTask(id string) (*model.ProbeTask, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	task, ok := s.tasks[id]
-	return task, ok
+	s.mu.RUnlock()
+	if ok {
+		return task, ok
+	}
+
+	task, ok, err := s.loadTask(id)
+	if err != nil || !ok {
+		return nil, false
+	}
+	s.mu.Lock()
+	s.tasks[id] = task
+	s.mu.Unlock()
+	return task, true
 }
 
 // GetResults gets results for a task
 func (s *ProbeService) GetResults(id string) ([]model.ProbeItem, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	results, ok := s.results[id]
-	return results, ok
+	s.mu.RUnlock()
+	if ok {
+		return results, true
+	}
+
+	dbResults, err := s.loadResults(id)
+	if err != nil || len(dbResults) == 0 {
+		return nil, false
+	}
+	s.mu.Lock()
+	s.results[id] = dbResults
+	s.mu.Unlock()
+	return dbResults, true
 }
 
 // GetResultsOrLoad returns in-memory results, and falls back to rebuilding
@@ -123,6 +156,9 @@ func (s *ProbeService) GetResultsOrLoad(id string) ([]model.ProbeItem, bool, err
 	s.mu.Lock()
 	s.results[id] = rebuilt
 	s.mu.Unlock()
+	for i := range rebuilt {
+		_ = s.upsertResult(id, &rebuilt[i])
+	}
 
 	return rebuilt, true, nil
 }
@@ -194,6 +230,7 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 	task.Status = model.ProbeStatusRunning
 	task.UpdatedAt = time.Now()
 	s.mu.Unlock()
+	_ = s.upsertTask(task)
 
 	// Clean up runningTasks when done
 	defer func() {
@@ -281,14 +318,57 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 	}
 	sendPhase("loading_pricing", fmt.Sprintf("已加载 %d 个 TLD 的定价信息", len(pricing)))
 
+	// Load IANA root TLD list as authoritative filter.
+	ianaCache := filepath.Join(cacheDir, "iana_tlds.txt")
+	ianaTLDs, err := s.loadOrRefreshIanaTlds(ianaCache, task.CacheTTLHours)
+	if err != nil {
+		s.markTaskFailed(taskID, err.Error())
+		sendPhase("error", fmt.Sprintf("加载 IANA TLD 列表失败: %s", err.Error()))
+		return err
+	}
+	sendPhase("filtering", fmt.Sprintf("已加载 %d 个 IANA 根区 TLD", len(ianaTLDs)))
+
 	// Filter TLDs
 	sendPhase("filtering", "正在筛选 TLD...")
 	var tldNames []string
 	tldMeta := make(map[string]map[string]string)
+	var preflightInvalidItems []model.ProbeItem
 	seen := make(map[string]bool)
 	for _, t := range tlds {
 		name := strings.ToLower(strings.TrimSpace(t["Name"]))
 		if name == "" {
+			continue
+		}
+		if !s.isValidTld(name, pricing) {
+			if !seen[name] {
+				seen[name] = true
+				msg := "Invalid TLD"
+				preflightInvalidItems = append(preflightInvalidItems, model.ProbeItem{
+					Domain: fmt.Sprintf("%s.%s", task.Word, name),
+					Tld:    name,
+					Error:  &msg,
+					Raw: map[string]interface{}{
+						"reason": "invalid_tld_format",
+						"name":   name,
+					},
+				})
+			}
+			continue
+		}
+		if !s.isIanaRootTld(name, ianaTLDs) {
+			if !seen[name] {
+				seen[name] = true
+				msg := "Invalid TLD (not in IANA root zone)"
+				preflightInvalidItems = append(preflightInvalidItems, model.ProbeItem{
+					Domain: fmt.Sprintf("%s.%s", task.Word, name),
+					Tld:    name,
+					Error:  &msg,
+					Raw: map[string]interface{}{
+						"reason": "not_in_iana_root_zone",
+						"name":   name,
+					},
+				})
+			}
 			continue
 		}
 		if task.TldMode == model.TldModeApiRegisterableOnly {
@@ -312,6 +392,7 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 	sort.Strings(tldNames)
 
 	total := len(tldNames)
+	total += len(preflightInvalidItems)
 	sendPhase("filtering", fmt.Sprintf("筛选后共 %d 个 TLD 需要探测 (模式: %s)", total, task.TldMode))
 
 	if total == 0 {
@@ -326,12 +407,31 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 	task.Total = total
 	task.UpdatedAt = time.Now()
 	s.mu.Unlock()
+	_ = s.upsertTask(task)
 
 	var yielded []model.ProbeItem
 	done := 0
 
+	for i := range preflightInvalidItems {
+		item := preflightInvalidItems[i]
+		yielded = append(yielded, item)
+		done++
+		event := model.ProgressEvent{
+			Type:  "progress",
+			Index: done,
+			Total: total,
+			Data:  item,
+		}
+		appendJsonl(event)
+		if progressChan != nil {
+			progressChan <- event
+		}
+		_ = s.upsertResult(taskID, &item)
+	}
+
 	// Process in batches
-	for i := 0; i < total; i += task.MaxBatch {
+	probableTotal := len(tldNames)
+	for i := 0; i < probableTotal; i += task.MaxBatch {
 		select {
 		case <-ctx.Done():
 			s.markTaskFailed(taskID, ctx.Err().Error())
@@ -340,24 +440,55 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 		}
 
 		end := i + task.MaxBatch
-		if end > total {
-			end = total
+		if end > probableTotal {
+			end = probableTotal
 		}
 		batchTlds := tldNames[i:end]
 
-		batchDomains := make([]string, len(batchTlds))
-		for j, tld := range batchTlds {
-			batchDomains[j] = fmt.Sprintf("%s.%s", task.Word, tld)
+		validBatchTlds := make([]string, 0, len(batchTlds))
+		batchDomains := make([]string, 0, len(batchTlds))
+		for _, tld := range batchTlds {
+			trimmed := strings.TrimSpace(tld)
+			if trimmed == "" {
+				msg := "Invalid TLD"
+				item := model.ProbeItem{
+					Domain: fmt.Sprintf("%s.", task.Word),
+					Tld:    "",
+					Error:  &msg,
+					Raw: map[string]interface{}{
+						"reason": "empty_tld_in_batch",
+					},
+				}
+				yielded = append(yielded, item)
+				done++
+				event := model.ProgressEvent{
+					Type:  "progress",
+					Index: done,
+					Total: total,
+					Data:  item,
+				}
+				appendJsonl(event)
+				if progressChan != nil {
+					progressChan <- event
+				}
+				_ = s.upsertResult(taskID, &item)
+				continue
+			}
+			validBatchTlds = append(validBatchTlds, trimmed)
+			batchDomains = append(batchDomains, fmt.Sprintf("%s.%s", task.Word, trimmed))
+		}
+		if len(batchDomains) == 0 {
+			continue
 		}
 
 		batchNum := i/task.MaxBatch + 1
-		totalBatches := (total + task.MaxBatch - 1) / task.MaxBatch
+		totalBatches := (probableTotal + task.MaxBatch - 1) / task.MaxBatch
 		sendPhase("probing", fmt.Sprintf("正在探测第 %d/%d 批域名: %s ... %s", batchNum, totalBatches, batchDomains[0], batchDomains[len(batchDomains)-1]))
 
 		results, err := client.DomainsCheck(ctx, batchDomains)
 		if err != nil {
 			// Mark entire batch as error
-			for _, tld := range batchTlds {
+			for _, tld := range validBatchTlds {
 				d := fmt.Sprintf("%s.%s", task.Word, tld)
 				errMsg := err.Error()
 				item := model.ProbeItem{
@@ -372,6 +503,7 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 
 				yielded = append(yielded, item)
 				done++
+				_ = s.upsertResult(taskID, &item)
 
 				event := model.ProgressEvent{
 					Type:  "progress",
@@ -393,7 +525,7 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 			byDomain[strings.ToLower(r.Domain)] = r
 		}
 
-		for _, tld := range batchTlds {
+		for _, tld := range validBatchTlds {
 			d := fmt.Sprintf("%s.%s", task.Word, tld)
 			raw, ok := byDomain[strings.ToLower(d)]
 			if !ok {
@@ -452,6 +584,11 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 				}
 				errMsg = &msg
 				totalPrice = nil
+			} else if isLikelyInvalidTLDResult(available, basePrice, premiumReg, icannFee, eapFee, pricing[tld]) {
+				msg := "Invalid TLD"
+				errMsg = &msg
+				available = nil
+				totalPrice = nil
 			}
 
 			item := model.ProbeItem{
@@ -471,12 +608,16 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 
 			yielded = append(yielded, item)
 			done++
+			_ = s.upsertResult(taskID, &item)
 
 			// Update task progress
 			s.mu.Lock()
 			task.Completed = done
 			task.UpdatedAt = time.Now()
 			s.mu.Unlock()
+			if done%20 == 0 || done == total {
+				_ = s.upsertTask(task)
+			}
 
 			event := model.ProgressEvent{
 				Type:  "progress",
@@ -532,6 +673,7 @@ func (s *ProbeService) RunTask(ctx context.Context, taskID string, progressChan 
 	task.UpdatedAt = time.Now()
 	s.results[task.ID] = yielded
 	s.mu.Unlock()
+	_ = s.upsertTask(task)
 
 	summary := model.SummaryEvent{
 		Type:           "summary",
@@ -562,6 +704,7 @@ func (s *ProbeService) markTaskFailed(taskID string, errMsg string) {
 		task.UpdatedAt = time.Now()
 		now := time.Now()
 		task.FinishedAt = &now
+		_ = s.upsertTask(task)
 	}
 }
 
@@ -644,6 +787,10 @@ func (s *ProbeService) isValidTld(name string, pricing map[string]map[string]str
 	if name == "" {
 		return false
 	}
+	// Root TLD should not contain dot labels.
+	if strings.Contains(name, ".") {
+		return false
+	}
 	// Exclude numeric TLDs
 	if _, err := strconv.Atoi(name); err == nil {
 		return false
@@ -652,11 +799,95 @@ func (s *ProbeService) isValidTld(name string, pricing map[string]map[string]str
 	if len(name) > 0 && name[0] >= '0' && name[0] <= '9' {
 		return false
 	}
-	// Must have pricing info
-	if _, ok := pricing[name]; !ok {
+	// Root TLDs are at least 2 chars unless punycode.
+	if len(name) < 2 {
 		return false
 	}
+	// Punycode TLD: xn--*
+	if strings.HasPrefix(name, "xn--") {
+		if len(name) <= 4 {
+			return false
+		}
+		for _, ch := range name[4:] {
+			if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
+				continue
+			}
+			return false
+		}
+		return true
+	}
+	// Non-punycode root TLDs should contain only letters.
+	for _, ch := range name {
+		if ch < 'a' || ch > 'z' {
+			return false
+		}
+	}
 	return true
+}
+
+func (s *ProbeService) isIanaRootTld(name string, ianaTLDs map[string]bool) bool {
+	return ianaTLDs[strings.ToLower(strings.TrimSpace(name))]
+}
+
+func (s *ProbeService) loadOrRefreshIanaTlds(path string, ttlHours float64) (map[string]bool, error) {
+	info, err := os.Stat(path)
+	if err == nil {
+		ageHours := time.Since(info.ModTime()).Hours()
+		if ageHours <= ttlHours {
+			if data, err := os.ReadFile(path); err == nil {
+				if parsed := parseIanaTlds(string(data)); len(parsed) > 0 {
+					return parsed, nil
+				}
+			}
+		}
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "https://data.iana.org/TLD/tlds-alpha-by-domain.txt", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("iana tld list http status: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	text := string(body)
+	parsed := parseIanaTlds(text)
+	if len(parsed) == 0 {
+		return nil, fmt.Errorf("iana tld list is empty")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, []byte(text), 0644); err != nil {
+		return nil, err
+	}
+
+	return parsed, nil
+}
+
+func parseIanaTlds(content string) map[string]bool {
+	set := make(map[string]bool)
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		set[strings.ToLower(line)] = true
+	}
+	return set
 }
 
 // isMainstreamTld checks if a TLD is "mainstream" (has ICANN fee)
@@ -937,4 +1168,26 @@ func calcTotalPrice(available, isPremium *bool, basePrice, premiumPrice, icannFe
 		return nil
 	}
 	return safeAdd(basePrice, icannFee, eapFee)
+}
+
+// isLikelyInvalidTLDResult identifies placeholder "available=true but no pricing at all" responses.
+func isLikelyInvalidTLDResult(available *bool, basePrice, premiumPrice, icannFee, eapFee *float64, priceInfo map[string]string) bool {
+	if available == nil || !*available {
+		return false
+	}
+
+	isZeroOrNil := func(v *float64) bool {
+		return v == nil || *v == 0
+	}
+
+	if !(isZeroOrNil(basePrice) && isZeroOrNil(premiumPrice) && isZeroOrNil(icannFee) && isZeroOrNil(eapFee)) {
+		return false
+	}
+
+	// If pricing API has no entry for this TLD, it's most likely not supported/invalid.
+	if len(priceInfo) == 0 {
+		return true
+	}
+
+	return false
 }
