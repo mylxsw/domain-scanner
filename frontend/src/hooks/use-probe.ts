@@ -92,6 +92,16 @@ export function useProbeResults(taskId: string | undefined) {
   })
 }
 
+export function useProbeHistory(limit = 50, offset = 0) {
+  return useQuery({
+    queryKey: ['probe', 'history', limit, offset],
+    queryFn: async (): Promise<{ items: ProbeTask[]; count: number; limit: number; offset: number }> => {
+      return fetchApi(`/api/probe?limit=${limit}&offset=${offset}`)
+    },
+    staleTime: 1000 * 10,
+  })
+}
+
 export function useUpdateProbeResults(taskId: string | undefined) {
   const queryClient = useQueryClient()
 

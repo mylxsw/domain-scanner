@@ -124,6 +124,11 @@ func (s *ProbeService) GetResults(id string) ([]model.ProbeItem, bool) {
 	return dbResults, true
 }
 
+// ListTasks returns historical probe tasks sorted by creation time desc.
+func (s *ProbeService) ListTasks(limit, offset int) ([]model.ProbeTask, error) {
+	return s.listTasks(limit, offset)
+}
+
 // GetResultsOrLoad returns in-memory results, and falls back to rebuilding
 // from results.jsonl if memory cache is empty.
 func (s *ProbeService) GetResultsOrLoad(id string) ([]model.ProbeItem, bool, error) {

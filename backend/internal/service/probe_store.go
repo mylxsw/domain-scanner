@@ -395,6 +395,77 @@ ORDER BY tld ASC
 	return out, rows.Err()
 }
 
+func (s *ProbeService) listTasks(limit, offset int) ([]model.ProbeTask, error) {
+	if s.db == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := s.db.QueryContext(context.Background(), `
+SELECT id, word, status, tld_mode, rate_per_min, max_batch, cache_ttl_hours,
+       total, completed, error, created_at, updated_at, finished_at, outdir,
+       report_md, results_csv, results_jsonl, elapsed_seconds
+FROM probe_tasks
+ORDER BY created_at DESC
+LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []model.ProbeTask
+	for rows.Next() {
+		var (
+			task                                  model.ProbeTask
+			status, tldMode, createdAt, updatedAt string
+			finishedAt, errText, outdir           sql.NullString
+			reportMD, resultsCSV, resultsJSONL    sql.NullString
+		)
+		if err := rows.Scan(
+			&task.ID, &task.Word, &status, &tldMode, &task.RatePerMin, &task.MaxBatch, &task.CacheTTLHours,
+			&task.Total, &task.Completed, &errText, &createdAt, &updatedAt, &finishedAt, &outdir,
+			&reportMD, &resultsCSV, &resultsJSONL, &task.ElapsedSeconds,
+		); err != nil {
+			return nil, err
+		}
+		task.Status = model.ProbeStatus(status)
+		task.TldMode = model.TldMode(tldMode)
+		task.CreatedAt = parseTimeOrZero(createdAt)
+		task.UpdatedAt = parseTimeOrZero(updatedAt)
+		if finishedAt.Valid {
+			t := parseTimeOrZero(finishedAt.String)
+			task.FinishedAt = &t
+		}
+		if errText.Valid {
+			task.Error = errText.String
+		}
+		if outdir.Valid {
+			task.Outdir = outdir.String
+		}
+		if reportMD.Valid {
+			task.ReportMd = reportMD.String
+		}
+		if resultsCSV.Valid {
+			task.ResultsCsv = resultsCSV.String
+		}
+		if resultsJSONL.Valid {
+			task.ResultsJsonl = resultsJSONL.String
+		}
+
+		items = append(items, task)
+	}
+
+	return items, rows.Err()
+}
+
 func boolToInt(v bool) int {
 	if v {
 		return 1

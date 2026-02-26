@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mylxsw/namecheap-domain-probe/backend/internal/api"
@@ -16,6 +17,7 @@ func main() {
 		host   = flag.String("host", "127.0.0.1", "监听地址")
 		port   = flag.Int("port", 8080, "监听端口")
 		outdir = flag.String("outdir", "./out", "输出目录")
+		webDir = flag.String("web-dir", "", "前端静态文件目录（包含 index.html）")
 	)
 	flag.Parse()
 
@@ -47,7 +49,8 @@ func main() {
 	handler := api.NewHandler(probeService, tldService, cfg)
 
 	// Setup router
-	router := api.SetupRouter(handler)
+	resolvedWebDir := resolveWebDir(*webDir)
+	router := api.SetupRouter(handler, resolvedWebDir)
 
 	// Start server
 	addr := fmt.Sprintf("%s:%d", *host, *port)
@@ -59,8 +62,34 @@ func main() {
 	fmt.Printf("  - GET  /api/probe/:id\n")
 	fmt.Printf("  - GET  /api/probe/:id/results\n")
 	fmt.Printf("  - GET  /api/probe/:id/stream\n")
+	if resolvedWebDir != "" {
+		fmt.Printf("Frontend static hosting enabled: %s\n", resolvedWebDir)
+	}
 
 	if err := router.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+func resolveWebDir(custom string) string {
+	candidates := []string{}
+	if custom != "" {
+		candidates = append(candidates, custom)
+	}
+	candidates = append(candidates, "./web", "./frontend/dist", "../frontend/dist")
+
+	for _, d := range candidates {
+		if d == "" {
+			continue
+		}
+		abs, err := filepath.Abs(d)
+		if err != nil {
+			continue
+		}
+		indexFile := filepath.Join(abs, "index.html")
+		if stat, err := os.Stat(indexFile); err == nil && !stat.IsDir() {
+			return abs
+		}
+	}
+	return ""
 }

@@ -1,49 +1,93 @@
-# Namecheap Domain Probe - Web 版
+# Domain Scanner
 
-一个现代化的 Web 应用，用于探测 Namecheap 域名可用性和价格信息。
+一个用于批量探测域名可用性与价格信息的 Web 系统。
 
-## 项目结构
+- 后端：Go + Gin + SQLite
+- 前端：React + Vite
+- 运行方式：本地开发 / Docker / Docker Compose
 
-```
+## 功能概览
+
+- 域名批量探测（SSE 实时进度）
+- 结果分类：可注册 / 已注册 / 错误
+- 结果排序、筛选与导出 CSV
+- 历史任务记录（首页可回看）
+- 数据持久化（SQLite）
+
+## 目录结构
+
+```text
 .
-├── backend/          # Go + Gin 后端 API
-├── frontend/         # React + TypeScript + Vite 前端
-├── Makefile          # 常用命令
-└── README.md
+├── backend/                 # Go 后端
+├── frontend/                # React 前端
+├── docker-compose.yml       # Compose 一键运行
+├── Dockerfile               # 多阶段镜像构建
+├── .env.example             # 环境变量示例
+└── Makefile                 # 常用命令
 ```
 
-## 快速开始
+## 环境变量
 
-### 环境要求
-
-- Go 1.23+
-- Node.js 18+
-- Namecheap API 账号
-
-### 配置
-
-设置 Namecheap API 环境变量：
+Namecheap API 相关变量（必填）：
 
 ```bash
-export NAMECHEAP_API_USER="your_api_user"
-export NAMECHEAP_API_KEY="your_api_key"
-export NAMECHEAP_CLIENT_IP="your_whitelisted_ip"
+NAMECHEAP_API_USER=your_api_user
+NAMECHEAP_API_KEY=your_api_key
+NAMECHEAP_CLIENT_IP=your_whitelisted_ip
 ```
 
-### 启动后端
+## 一键运行（推荐）
+
+### 1) Docker Compose
+
+```bash
+cp .env.example .env
+# 编辑 .env 填入真实值
+
+docker compose up -d --build
+```
+
+访问：<http://localhost:8080>
+
+停止：
+
+```bash
+docker compose down
+```
+
+查看日志：
+
+```bash
+docker compose logs -f
+```
+
+## 数据持久化说明
+
+Compose 已配置宿主机目录挂载：
+
+- 容器内：`/app/out`
+- 宿主机：`./data/out`
+
+持久化数据包括：
+
+- `probe.sqlite`（任务、结果、TLD 清单）
+- 每个任务输出目录（`results.jsonl` / `results.csv` / `report.md` / 缓存文件）
+
+即使容器重建，历史数据仍保留在 `./data/out`。
+
+## 本地开发
+
+### 1) 启动后端
 
 ```bash
 cd backend
 go mod tidy
 go run ./cmd/server
-
-# 或使用自定义端口
-go run ./cmd/server -host 0.0.0.0 -port 8080
 ```
 
-后端将在 `http://localhost:8080` 启动。
+默认监听：`http://127.0.0.1:8080`
 
-### 启动前端
+### 2) 启动前端（开发模式）
 
 ```bash
 cd frontend
@@ -51,138 +95,69 @@ npm install
 npm run dev
 ```
 
-前端将在 `http://localhost:3000` 启动，并自动代理 API 请求到后端。
+默认监听：`http://localhost:3000`（代理到后端 API）
 
-## 功能特性
-
-### 后端 API
-
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| GET | `/api/health` | 健康检查 |
-| GET | `/api/tlds` | 获取 TLD 列表 |
-| POST | `/api/probe` | 启动域名探测任务 |
-| GET | `/api/probe/:id` | 获取任务状态 |
-| GET | `/api/probe/:id/results` | 获取探测结果 |
-| GET | `/api/probe/:id/stream` | SSE 实时流 |
-
-### 前端功能
-
-- **域名搜索**: 输入关键词，选择 TLD 模式（全部/热门/低价）
-- **实时进度**: SSE 实时显示探测进度
-- **结果展示**:
-  - 可排序、筛选的结果表格
-  - 价格分布图表
-  - 可注册/已注册/出错分类统计
-- **数据导出**: 支持 CSV 导出
-
-## 技术栈
-
-### 后端
-- **Go 1.23**: 高性能后端语言
-- **Gin**: Web 框架
-- **UUID**: 任务标识
-- **CORS**: 跨域支持
-
-### 前端
-- **React 18**: UI 框架
-- **TypeScript**: 类型安全
-- **Vite**: 构建工具
-- **Tailwind CSS**: 样式
-- **shadcn/ui**: 组件库
-- **React Query**: 状态管理
-- **Recharts**: 图表
-- **React Router**: 路由
-
-## API 使用示例
-
-### 启动探测任务
+## 后端托管前端静态文件（单服务）
 
 ```bash
-curl -X POST http://localhost:8080/api/probe \
-  -H "Content-Type: application/json" \
-  -d '{"word": "example", "tld_mode": "mainstream-only"}'
+cd frontend && npm install && npm run build
+cd ../backend && go run ./cmd/server -web-dir ../frontend/dist
 ```
 
-响应：
-```json
-{
-  "task_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "running",
-  "word": "example"
-}
-```
+访问：<http://localhost:8080>
 
-### 获取实时流
+## Docker（非 Compose）
+
+构建镜像：
 
 ```bash
-curl http://localhost:8080/api/probe/550e8400-e29b-41d4-a716-446655440000/stream
+docker build -t domain-scanner:latest .
 ```
 
-### 获取结果
+运行容器：
 
 ```bash
-curl http://localhost:localhost:8080/api/probe/550e8400-e29b-41d4-a716-446655440000/results
+docker run --rm -p 8080:8080 \
+  -e NAMECHEAP_API_USER \
+  -e NAMECHEAP_API_KEY \
+  -e NAMECHEAP_CLIENT_IP \
+  -v "$(pwd)/data/out:/app/out" \
+  domain-scanner:latest
 ```
 
-## 开发说明
-
-### 后端开发
+## Makefile 常用命令
 
 ```bash
-cd backend
-
-# 运行测试
-go test ./...
-
-# 构建
-go build -o bin/server ./cmd/server
-```
-
-### 前端开发
-
-```bash
-cd frontend
-
-# 安装依赖
-npm install
-
-# 开发模式
-npm run dev
-
-# 构建
-npm run build
-
-# 预览生产构建
-npm run preview
-```
-
-### 使用 Makefile
-
-```bash
-# 安装所有依赖
 make install
-
-# 构建项目
 make build
-
-# 开发模式（需要两个终端）
+make test
 make run-backend
-make run-fronten
+make run-frontend
+
+make docker-build
+make docker-run
+make docker-compose-up
+make docker-compose-down
+make docker-compose-logs
 ```
 
-## 原始命令行工具
+## API 概览
 
-原有的命令行工具仍然可用：
+- `GET /api/health`
+- `GET /api/tlds`
+- `POST /api/probe`
+- `GET /api/probe`（历史任务列表）
+- `GET /api/probe/:id`
+- `GET /api/probe/:id/results`
+- `GET /api/probe/:id/stream`
 
-```bash
-# 使用原有代码
-go run . probe mybrand --outdir ./out
+## 常见问题
 
-# 启动 SSE 服务
-go run . serve --host 0.0.0.0 --port 8000
-```
+1. 前端页面打不开  
+确认你访问的是 `http://localhost:8080`，并且容器日志里有 `Frontend static hosting enabled`。
 
-## License
+2. 没有历史记录  
+检查 `./data/out/probe.sqlite` 是否存在；删除容器不会删除该目录，但删除目录会丢失历史。
 
-MIT
+3. Namecheap 调用失败  
+检查 `.env` 的 API 变量和白名单 IP 是否正确。

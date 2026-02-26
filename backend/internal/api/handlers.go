@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -59,6 +60,38 @@ func (h *Handler) CreateProbe(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, task)
+}
+
+// ListProbes handles GET /api/probe
+func (h *Handler) ListProbes(c *gin.Context) {
+	limit := 50
+	offset := 0
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	if v := c.Query("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			offset = n
+		}
+	}
+
+	items, err := h.probeService.ListTasks(limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
+			Error:   "list_failed",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"items":  items,
+		"limit":  limit,
+		"offset": offset,
+		"count":  len(items),
+	})
 }
 
 // GetProbeStatus handles GET /api/probe/:id

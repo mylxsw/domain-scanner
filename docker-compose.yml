@@ -1,0 +1,17 @@
+services:
+  domain-scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: domain-scanner:latest
+    container_name: domain-scanner
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      NAMECHEAP_API_USER: ${NAMECHEAP_API_USER}
+      NAMECHEAP_API_KEY: ${NAMECHEAP_API_KEY}
+      NAMECHEAP_CLIENT_IP: ${NAMECHEAP_CLIENT_IP}
+      GIN_MODE: release
+    volumes:
+      - ./data/out:/app/out

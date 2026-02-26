@@ -1,4 +1,4 @@
-.PHONY: all build run-dev run-backend run-frontend clean install
+.PHONY: all build run-dev run-backend run-frontend clean install test help docker-build docker-run docker-compose-up docker-compose-down docker-compose-logs
 
 # 默认目标
 all: install build
@@ -35,8 +35,23 @@ test:
 
 # Docker 构建
 docker-build:
-	docker build -t domain-probe-backend ./backend
-	docker build -t domain-probe-frontend ./frontend
+	docker build -t domain-scanner:latest .
+
+docker-run: docker-build
+	docker run --rm -p 8080:8080 \
+		-e NAMECHEAP_API_USER \
+		-e NAMECHEAP_API_KEY \
+		-e NAMECHEAP_CLIENT_IP \
+		domain-scanner:latest
+
+docker-compose-up:
+	docker compose up -d --build
+
+docker-compose-down:
+	docker compose down
+
+docker-compose-logs:
+	docker compose logs -f
 
 # 帮助信息
 help:
@@ -47,4 +62,9 @@ help:
 	@echo "  make run-frontend - Run frontend in development mode"
 	@echo "  make test         - Run tests"
 	@echo "  make clean        - Clean build files"
+	@echo "  make docker-build - Build Docker image"
+	@echo "  make docker-run   - Run Docker container"
+	@echo "  make docker-compose-up   - Start app by docker compose"
+	@echo "  make docker-compose-down - Stop app by docker compose"
+	@echo "  make docker-compose-logs - Tail docker compose logs"
 	@echo "  make help         - Show this help message"
