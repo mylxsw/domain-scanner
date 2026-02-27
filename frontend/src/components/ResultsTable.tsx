@@ -50,6 +50,9 @@ export default function ResultsTable({ results }: ResultsTableProps) {
     return `${symbol}${price.toFixed(2)}`
   }
 
+  const getNamecheapSearchUrl = (domain: string) =>
+    `https://www.namecheap.com/domains/registration/results/?domain=${encodeURIComponent(domain)}`
+
   const filteredAndSortedResults = useMemo(() => {
     let filtered = results
 
@@ -222,7 +225,14 @@ export default function ResultsTable({ results }: ResultsTableProps) {
               filteredAndSortedResults.map((result) => (
                 <TableRow key={result.domain}>
                   <TableCell className="font-medium">
-                    {result.domain}
+                    <a
+                      href={getNamecheapSearchUrl(result.domain)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      {result.domain}
+                    </a>
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">.{result.tld}</Badge>

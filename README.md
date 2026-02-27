@@ -161,3 +161,19 @@ make docker-compose-logs
 
 3. Namecheap 调用失败  
 检查 `.env` 的 API 变量和白名单 IP 是否正确。
+
+4. Linux + Docker 启动报错：`unable to open database file: out of memory (14)`  
+这通常不是内存问题，而是挂载目录不可写（SQLite `CANTOPEN(14)`）。请在宿主机执行：
+
+```bash
+mkdir -p ./data/out
+sudo chown -R 10001:10001 ./data/out
+chmod 775 ./data/out
+```
+
+然后重启容器：
+
+```bash
+docker compose down
+docker compose up -d --build
+```

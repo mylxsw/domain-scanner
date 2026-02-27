@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,6 +16,10 @@ import (
 )
 
 func (s *ProbeService) initStore(path string) error {
+	if err := ensureSQLitePathWritable(path); err != nil {
+		return err
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return err
@@ -71,6 +78,28 @@ CREATE TABLE IF NOT EXISTS tld_catalog (
 	}
 
 	s.db = db
+	return nil
+}
+
+func ensureSQLitePathWritable(path string) error {
+	if path == "" {
+		return fmt.Errorf("sqlite database path is empty")
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("prepare sqlite directory %s failed: %w", dir, err)
+	}
+
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return fmt.Errorf(
+			"sqlite file is not writable: %s: %w (if running in Docker, check bind-mount permissions for %s)",
+			path, err, dir,
+		)
+	}
+	_ = f.Close()
+
 	return nil
 }
 

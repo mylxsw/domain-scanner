@@ -52,7 +52,7 @@ export default function DomainSearchForm() {
   const isLoading = startProbe.isPending;
 
   return (
-    <Card className="w-full max-w-2xl mx-auto">
+    <Card className="w-full mx-auto">
       <CardHeader>
         <CardTitle className="text-2xl">域名可用性探测</CardTitle>
         <CardDescription>
