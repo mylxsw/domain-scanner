@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import type { ProbeItem } from '@/types'
 
-type SortField = 'domain' | 'tld' | 'tld_length' | 'available' | 'price'
+type SortField = 'tld' | 'tld_length' | 'available' | 'price'
 type SortDirection = 'asc' | 'desc'
 
 interface ResultsTableProps {
@@ -50,9 +50,6 @@ export default function ResultsTable({ results }: ResultsTableProps) {
     return `${symbol}${price.toFixed(2)}`
   }
 
-  const getNamecheapSearchUrl = (domain: string) =>
-    `https://www.namecheap.com/domains/registration/results/?domain=${encodeURIComponent(domain)}`
-
   const filteredAndSortedResults = useMemo(() => {
     let filtered = results
 
@@ -76,9 +73,6 @@ export default function ResultsTable({ results }: ResultsTableProps) {
       let comparison = 0
 
       switch (sortField) {
-        case 'domain':
-          comparison = a.domain.localeCompare(b.domain)
-          break
         case 'tld':
           comparison = a.tld.localeCompare(b.tld)
           break
@@ -160,22 +154,22 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => handleSort('domain')}
+                  onClick={() => handleSort('tld')}
                   className="gap-1"
                 >
-                  域名
-                  {getSortIcon('domain')}
+                  后缀
+                  {getSortIcon('tld')}
                 </Button>
               </TableHead>
               <TableHead>
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => handleSort('tld')}
+                  onClick={() => handleSort('price')}
                   className="gap-1"
                 >
-                  后缀
-                  {getSortIcon('tld')}
+                  总价(1年)
+                  {getSortIcon('price')}
                 </Button>
               </TableHead>
               <TableHead>
@@ -200,42 +194,30 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                   {getSortIcon('available')}
                 </Button>
               </TableHead>
-              <TableHead>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleSort('price')}
-                  className="gap-1"
-                >
-                  总价(1年)
-                  {getSortIcon('price')}
-                </Button>
-              </TableHead>
               <TableHead className="hidden sm:table-cell">详情</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredAndSortedResults.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                   暂无数据
                 </TableCell>
               </TableRow>
             ) : (
               filteredAndSortedResults.map((result) => (
                 <TableRow key={result.domain}>
-                  <TableCell className="font-medium">
-                    <a
-                      href={getNamecheapSearchUrl(result.domain)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary hover:underline"
-                    >
-                      {result.domain}
-                    </a>
-                  </TableCell>
                   <TableCell>
                     <Badge variant="outline">.{result.tld}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    {result.total_price !== null ? (
+                      <span className="font-medium">
+                        {formatPrice(result.total_price, result.currency)}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <span className="text-sm">{result.tld.length}</span>
@@ -258,15 +240,6 @@ export default function ResultsTable({ results }: ResultsTableProps) {
                       </div>
                     ) : (
                       <span className="text-sm text-muted-foreground">未知</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {result.total_price !== null ? (
-                      <span className="font-medium">
-                        {formatPrice(result.total_price, result.currency)}
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">-</span>
                     )}
                   </TableCell>
                   <TableCell className="hidden sm:table-cell text-muted-foreground text-sm">

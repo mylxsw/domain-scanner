@@ -69,18 +69,16 @@ export default function HomePage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>关键词</TableHead>
-                  <TableHead>模式</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead>进度</TableHead>
                   <TableHead>创建时间</TableHead>
-                  <TableHead>操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {historyLoading ? (
                   <TableRow>
                     <TableCell
-                      colSpan={6}
+                      colSpan={4}
                       className="text-center text-muted-foreground"
                     >
                       加载中...
@@ -89,7 +87,7 @@ export default function HomePage() {
                 ) : history.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={6}
+                      colSpan={4}
                       className="text-center text-muted-foreground"
                     >
                       暂无历史记录
@@ -98,21 +96,19 @@ export default function HomePage() {
                 ) : (
                   history.map((item) => (
                     <TableRow key={item.id}>
-                      <TableCell className="font-medium">{item.word}</TableCell>
-                      <TableCell>{item.tld_mode}</TableCell>
+                      <TableCell className="font-medium">
+                        <Link
+                          to={`/results/${item.id}`}
+                          className="text-primary hover:underline"
+                        >
+                          {item.word}
+                        </Link>
+                      </TableCell>
                       <TableCell>{statusBadge(item.status)}</TableCell>
                       <TableCell>
                         {item.completed}/{item.total}
                       </TableCell>
                       <TableCell>{formatTime(item.created_at)}</TableCell>
-                      <TableCell>
-                        <Link
-                          to={`/results/${item.id}`}
-                          className="text-primary hover:underline"
-                        >
-                          查看
-                        </Link>
-                      </TableCell>
                     </TableRow>
                   ))
                 )}
